@@ -1,220 +1,62 @@
 import os
 import logging
-from typing import List, Dict, Any
 import re
+from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
 class SubtitleSynchronizer:
-    """Sincroniza legendas com o vídeo"""
+    """Sincroniza legendas com o vídeo e gerencia diferentes formatos"""
     
     def __init__(self):
+        # Pattern para capturar HH:MM:SS,ms ou .ms
         self.time_pattern = re.compile(r'(\d{2}):(\d{2}):(\d{2})[,.](\d{3})')
-    
-    def load_subtitles(self, file_path: str) -> List[Dict]:
+
+    def adjust_offset(self, subtitles: List[Dict], offset_seconds: float) -> List[Dict]:
         """
-        Carrega legendas de arquivo
-        
-        Args:
-            file_path: Caminho do arquivo de legenda
-            
-        Returns:
-            Lista de legendas
+        Ajusta o tempo de todas as legendas (adianta ou atrasa).
+        offset_seconds: segundos para somar (ex: 2.0 para adiantar 2s)
         """
-        ext = os.path.splitext(file_path)[1].lower()
-        
-        if ext == '.srt':
-            return self._load_srt(file_path)
-        elif ext in ['.ass', '.ssa']:
-            return self._load_ass(file_path)
-        elif ext == '.vtt':
-            return self._load_vtt(file_path)
-        else:
-            raise ValueError(f"Formato de legenda não suportado: {ext}")
-    
-    def _load_srt(self, file_path: str) -> List[Dict]:
-        """Carrega arquivo SRT"""
-        subtitles = []
-        
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Dividir por linhas em branco
-        blocks = [b.strip() for b in content.split('\n\n') if b.strip()]
-        
-        for block in blocks:
-            lines = block.split('\n')
-            if len(lines) < 3:
-                continue
-            
-            # Extrair tempos
-            time_match = re.match(r'(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})', lines[1])
-            if not time_match:
-                continue
-            
-            start_time = self._parse_time(time_match.group(1))
-            end_time = self._parse_time(time_match.group(2))
-            
-            # Juntar texto (pode ter múltiplas linhas)
-            text = '\n'.join(lines[2:])
-            
-            subtitles.append({
-                'index': len(subtitles) + 1,
-                'start': start_time,
-                'end': end_time,
-                'text': text,
-                'original_text': text
-            })
-        
+        for sub in subtitles:
+            sub['start'] = max(0, sub['start'] + offset_seconds)
+            sub['end'] = max(0, sub['end'] + offset_seconds)
         return subtitles
-    
-    def _load_ass(self, file_path: str) -> List[Dict]:
-        """Carrega arquivo ASS/SSA"""
-        subtitles = []
-        
-        with open(file_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        
-        in_events = False
-        for line in lines:
-            line = line.strip()
-            
-            if line.startswith('[Events]'):
-                in_events = True
-                continue
-            
-            if in_events and line.startswith('Dialogue:'):
-                parts = line.split(',', 9)
-                if len(parts) >= 10:
-                    start_time = self._parse_ass_time(parts[1])
-                    end_time = self._parse_ass_time(parts[2])
-                    text = parts[9]
-                    
-                    # Remover tags de formatação
-                    text = re.sub(r'\{[^}]*\}', '', text)
-                    
-                    subtitles.append({
-                        'index': len(subtitles) + 1,
-                        'start': start_time,
-                        'end': end_time,
-                        'text': text,
-                        'original_text': text
-                    })
-        
-        return subtitles
-    
-    def _load_vtt(self, file_path: str) -> List[Dict]:
-        """Carrega arquivo WebVTT"""
-        subtitles = []
-        
-        with open(file_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            
-            # Pular cabeçalho e linhas vazias
-            if line == 'WEBVTT' or not line:
-                i += 1
-                continue
-            
-            # Tentar encontrar linha de tempo
-            time_match = re.match(r'(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3})', line)
-            if time_match:
-                start_time = self._parse_time(time_match.group(1).replace('.', ','))
-                end_time = self._parse_time(time_match.group(2).replace('.', ','))
-                
-                # Coletar texto
-                text_lines = []
-                i += 1
-                while i < len(lines) and lines[i].strip():
-                    text_lines.append(lines[i].strip())
-                    i += 1
-                
-                text = ' '.join(text_lines)
-                
-                subtitles.append({
-                    'index': len(subtitles) + 1,
-                    'start': start_time,
-                    'end': end_time,
-                    'text': text,
-                    'original_text': text
-                })
-            else:
-                i += 1
-        
-        return subtitles
-    
-    def sync_subtitles(self, subtitles: List[Dict], video_info: Dict) -> List[Dict]:
+
+    def sync_by_scenes(self, subtitles: List[Dict], scene_changes: List[float]) -> List[Dict]:
         """
-        Sincroniza legendas com o vídeo
-        
-        Args:
-            subtitles: Lista de legendas
-            video_info: Informações do vídeo
-            
-        Returns:
-            Legendas sincronizadas
+        Ajusta a primeira legenda para coincidir com a primeira troca de cena/áudio detectada.
         """
-        synced_subtitles = []
-        
-        # Obter informações do vídeo
-        video_duration = video_info.get('duration', 0)
-        scene_changes = video_info.get('scenes', [])
-        
-        if not subtitles or video_duration <= 0:
+        if not subtitles or not scene_changes:
             return subtitles
-        
-        # Calcular deslocamento baseado na primeira cena
-        if scene_changes:
-            first_scene = scene_changes[0]
-            first_subtitle = subtitles[0]['start']
             
-            # Ajustar para que primeira legenda comece na primeira cena
-            offset = first_scene - first_subtitle
-            
-            for sub in subtitles:
-                new_start = max(0, sub['start'] + offset)
-                new_end = min(video_duration, sub['end'] + offset)
-                
-                # Garantir que a legenda não seja muito curta
-                if new_end - new_start < 0.5:  # Mínimo 0.5 segundos
-                    new_end = new_start + 1.0
-                
-                synced_sub = sub.copy()
-                synced_sub['start'] = new_start
-                synced_sub['end'] = new_end
-                synced_subtitles.append(synced_sub)
-        else:
-            # Sem detecção de cenas, manter tempos originais
-            synced_subtitles = subtitles
+        first_scene = scene_changes[0]
+        first_subtitle_start = subtitles[0]['start']
         
-        return synced_subtitles
-    
+        # Calcula a diferença (o 'drift')
+        offset = first_scene - first_subtitle_start
+        
+        logger.info(f"Aplicando ajuste de sincronia: {offset:.3f}s baseado na primeira cena.")
+        return self.adjust_offset(subtitles, offset)
+
     def _parse_time(self, time_str: str) -> float:
-        """Converte string de tempo para segundos"""
+        """Converte string de tempo (SRT/VTT) para segundos decimais"""
         match = self.time_pattern.match(time_str.replace(',', '.'))
         if match:
-            hours = int(match.group(1))
-            minutes = int(match.group(2))
-            seconds = int(match.group(3))
-            milliseconds = int(match.group(4))
-            
-            return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000.0
-        
+            h, m, s, ms = map(int, match.groups())
+            return h * 3600 + m * 60 + s + ms / 1000.0
         return 0.0
-    
+
     def _parse_ass_time(self, time_str: str) -> float:
-        """Converte tempo ASS para segundos"""
-        parts = time_str.split(':')
-        if len(parts) == 3:
-            hours = int(parts[0])
-            minutes = int(parts[1])
-            seconds_parts = parts[2].split('.')
-            seconds = int(seconds_parts[0])
-            centiseconds = int(seconds_parts[1]) if len(seconds_parts) > 1 else 0
-            
-            return hours * 3600 + minutes * 60 + seconds + centiseconds / 100.0
-        
-        return 0.0
+        """Converte tempo formato ASS (H:MM:SS.cs) para segundos"""
+        try:
+            parts = time_str.split(':')
+            h = int(parts[0])
+            m = int(parts[1])
+            s_parts = parts[2].split('.')
+            s = int(s_parts[0])
+            cs = int(s_parts[1]) # centisegundos (1/100)
+            return h * 3600 + m * 60 + s + cs / 100.0
+        except:
+            return 0.0
+
+    # ... (Seus métodos _load_srt, _load_ass e _load_vtt aqui dentro)
