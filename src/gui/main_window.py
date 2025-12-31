@@ -1,56 +1,78 @@
-from PyQt6.QtWidgets import QMainWindow, QFileDialog, QMessageBox
-from PyQt6.QtCore import QThread
+import logging
+from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QPushButton, QFileDialog, QMessageBox
+from PyQt6.QtCore import Qt
+
 from src.core.workflow_manager import WorkflowManager
 from src.gui.progress_dialog import ProgressDialog
+
+logger = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
     def __init__(self, config_manager):
         super().__init__()
+        # Armazena as configurações (essencial para não dar erro de NoneType)
         self.config = config_manager
         
-        # Define o título usando o nome oficial
-        self.setWindowTitle(self.config.get('app_name', 'Amarelo Subs'))
+        # Inicializa o WorkflowManager passando as configurações
+        self.workflow = WorkflowManager(self.config)
         
-        # ... (seu código de UI: botões, inputs, etc.)
-        
-        # Conexão do botão de processar
-        # self.btn_run.clicked.connect(self.handle_processing)
+        # Configurações básicas da janela principal
+        self.setWindowTitle("Amarelo Subs")
+        self.setMinimumSize(400, 200)
 
-    def handle_processing(self):
-        video = self.input_video.text() # caminho do vídeo selecionado
-        subtitle = self.input_subtitle.text() # pode ser vazio
-        
-        if not video:
-            QMessageBox.warning(self, "Erro", "Selecione um vídeo primeiro!")
-            return
+        # Configuração da Interface (UI)
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        self.layout = QVBoxLayout(self.central_widget)
+        self.layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # 1. Criar o Diálogo de Progresso
-        self.progress_dialog = ProgressDialog(self)
-        
-        # 2. Criar a Thread e o Worker (WorkflowManager)
-        self.thread = QThread()
-        self.worker = WorkflowManager(self.config)
-        self.worker.moveToThread(self.thread)
+        # Botão de seleção (o "gatilho" do app)
+        self.btn_selecionar = QPushButton("Selecionar Diretório de Vídeos")
+        self.btn_selecionar.setMinimumWidth(250)
+        self.btn_selecionar.setMinimumHeight(60)
+        self.btn_selecionar.clicked.connect(self._on_select_directory)
 
-        # 3. Conectar os Sinais (A mágica acontece aqui)
-        self.thread.started.connect(lambda: self.worker.run_workflow(video, subtitle))
-        
-        # Atualiza a UI do diálogo com dados do Worker
-        self.worker.progress_update.connect(self.progress_dialog.update_progress)
-        self.worker.preview_update.connect(self.progress_dialog.update_preview)
-        
-        # Finalização
-        self.worker.finished.connect(self.on_processing_finished)
-        self.worker.finished.connect(self.thread.quit)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self.thread.deleteLater)
+        self.layout.addWidget(self.btn_selecionar)
 
-        # 4. Iniciar
-        self.thread.start()
-        self.progress_dialog.exec() # Abre como modal
+    def _on_select_directory(self):
+        """Abre o seletor de pastas e inicia o trabalho pesado"""
+        dir_path = QFileDialog.getExistingDirectory(self, "Selecionar Pasta de Vídeos")
+        
+        if dir_path:
+            logger.info(f"Diretório selecionado: {dir_path}")
+            
+            # 1. Cria e exibe a janela de progresso amarela
+            self.progress_ui = ProgressDialog(self)
+            self.progress_ui.show()
 
-    def on_processing_finished(self, success, message):
+            # 2. Configura o diretório no Workflow
+            self.workflow.set_directory(dir_path)
+            
+            # 3. Conecta os sinais da Thread aos métodos da Interface
+            # Isso garante que o texto e a barra mudem sem travar a janela
+            self.workflow.progress_update.connect(self.progress_ui.update_progress)
+            self.workflow.preview_update.connect(self.progress_ui.update_preview)
+            self.workflow.finished.connect(self._on_workflow_finished)
+            
+            # 4. Inicia o processamento em segundo plano (Thread separada)
+            # IMPORTANTE: Usamos .start() para não congelar a interface
+            self.workflow.start()
+
+    def _on_workflow_finished(self, success, message):
+        """Chamado quando o WorkflowManager termina o processamento"""
+        # Fecha a janela de progresso
+        if hasattr(self, 'progress_ui'):
+            self.progress_ui.close()
+            
+        # Exibe o resultado final para o usuário
         if success:
-            QMessageBox.information(self, "Sucesso", f"Processamento concluído!\nSalvo em: {message}")
+            QMessageBox.information(self, "Sucesso", message)
         else:
-            QMessageBox.critical(self, "Erro crítico", f"Falha no processamento:\n{message}")
+            QMessageBox.critical(self, "Erro", f"Ocorreu um problema: {message}")
+
+    def closeEvent(self, event):
+        """Garante que o workflow pare se o usuário fechar a janela principal"""
+        if self.workflow.isRunning():
+            self.workflow.terminate()
+            self.workflow.wait()
+        event.accept()

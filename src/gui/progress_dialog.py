@@ -1,143 +1,46 @@
-import time
-from datetime import datetime, timedelta
-# Alterado de PySide6 para PyQt6
-from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QLabel, QProgressBar, 
-    QTextEdit, QScrollArea, QWidget
-)
+import logging
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QProgressBar
 from PyQt6.QtCore import Qt
+
+logger = logging.getLogger(__name__)
 
 class ProgressDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Processando - Amarelo Subs")
-        self.setModal(True)
-        self.setMinimumSize(600, 500)
-        
-        # Estilo visual condizente com o tema Dark do Amarelo Subs
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #2d2d2d;
-            }
-        """)
-        
-        # Variáveis de controle
-        self.start_time = None
-        self.processed_count = 0
-        self.total_count = 0
-        self.errors = []
+        self.setWindowTitle("Amarelo Subs - Processando")
+        self.setFixedSize(400, 150)
+        # Remove o botão de fechar para o usuário não interromper o processo acidentalmente
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint)
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        self.layout = QVBoxLayout(self)
 
-        # Status Label
-        self.label_status = QLabel("Preparando...")
-        self.label_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label_status.setStyleSheet("""
-            QLabel {
-                background-color: #3a3a3a;
-                border: 1px solid #5a5a5a;
-                border-radius: 8px;
-                padding: 12px;
-                color: #f4c430;
-                font-size: 11pt;
-                font-weight: bold;
-            }
-        """)
+        # Rótulo que mostra o nome do vídeo atual
+        self.label_status = QLabel("Iniciando...")
+        self.label_status.setWordWrap(True)
+        self.layout.addWidget(self.label_status)
 
-        # Barra de Progresso
-        self.progress = QProgressBar()
-        self.progress.setStyleSheet("""
+        # Barra de progresso (0 a 100)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setStyleSheet("""
             QProgressBar {
-                border: 1px solid #5a5a5a;
-                border-radius: 8px;
+                border: 2px solid #555;
+                border-radius: 5px;
                 text-align: center;
-                background-color: #1a1a1a;
-                color: white;
-                height: 25px;
             }
             QProgressBar::chunk {
-                background-color: #f4c430;
-                border-radius: 7px;
+                background-color: #f4c430; /* Amarelo Subs */
+                width: 10px;
             }
         """)
+        self.layout.addWidget(self.progress_bar)
 
-        self.label_time = QLabel("")
-        self.label_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label_time.setStyleSheet("color: #b0b0b0;")
+    def update_progress(self, value):
+        """Recebe um inteiro de 0 a 100 e atualiza a barra"""
+        self.progress_bar.setValue(value)
 
-        # Log
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #1e1e1e;
-                color: #d0d0d0;
-                border-radius: 5px;
-                font-family: 'Consolas';
-            }
-        """)
-        self.log_text.setMaximumHeight(150)
-
-        # Preview
-        self.preview_text = QTextEdit()
-        self.preview_text.setReadOnly(True)
-        self.preview_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #000000;
-                color: #ffffff;
-                border: 1px solid #f4c430;
-                border-radius: 5px;
-            }
-        """)
-
-        layout.addWidget(self.label_status)
-        layout.addWidget(self.progress)
-        layout.addWidget(self.label_time)
-        layout.addWidget(QLabel("Log detalhado:"))
-        layout.addWidget(self.log_text)
-        layout.addWidget(QLabel("Pré-visualização:"))
-        layout.addWidget(self.preview_text)
-
-    def _add_log(self, message: str, is_error: bool = False):
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        prefix = "❌" if is_error else "ℹ️"
-        self.log_text.append(f"[{timestamp}] {prefix} {message}")
-        # Scroll automático
-        self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
-
-    def update_progress(self, message: str, current: int, total: int):
-        """Método principal para atualizar a interface via Sinais"""
-        self.label_status.setText(message)
-        self._add_log(message)
-
-        if self.start_time is None and total > 0:
-            self.start_time = time.time()
-
-        if total > 0:
-            percent = int((current / total) * 100)
-            self.progress.setValue(percent)
-            self.progress.setFormat(f"{percent}% ({current}/{total})")
-            
-            # Cálculo de ETA (Tempo Estimado)
-            if current > 0:
-                elapsed = time.time() - self.start_time
-                avg = elapsed / current
-                remaining = avg * (total - current)
-                eta = timedelta(seconds=int(remaining))
-                self.label_time.setText(f"Tempo restante estimado: {str(eta)}")
-
-        if current >= total and total > 0:
-            self._add_log("✅ Processamento concluído!")
-
-    def update_preview(self, content: str):
-        """Atualiza a caixa de texto com a legenda gerada"""
-        self.preview_text.setPlainText(content)
-
-    def showEvent(self, event):
-        """Limpa o diálogo sempre que ele for aberto"""
-        super().showEvent(event)
-        self.progress.setValue(0)
-        self.log_text.clear()
-        self.preview_text.clear()
-        self.start_time = None
+    def update_preview(self, text):
+        """Atualiza o texto exibido acima da barra"""
+        self.label_status.setText(text)
+        logger.info(f"Status da UI: {text}")

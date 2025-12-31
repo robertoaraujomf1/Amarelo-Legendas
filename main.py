@@ -27,7 +27,9 @@ def main():
 
     # 4. Aplica o Tema (Dark Mode por padrão)
     theme = ThemeManager()
-    app.setStyleSheet(theme.get_style(config.get('general', {}).get('theme', 'dark')))
+    # Pega o nome do tema das configs ou usa 'dark' como padrão
+    current_theme = config.get('general', {}).get('theme', 'dark')
+    theme.apply_theme(app, current_theme)
 
     # 5. Inicializa e exibe a Janela Principal
     # Passamos o config_manager para que a janela saiba as preferências
